@@ -43,8 +43,9 @@ class _StubModel:
 class _FakeProvider:
     """Provider stub returning canned live state and odds quotes."""
 
-    def __init__(self, *, live: bool = True):
+    def __init__(self, *, live: bool = True, with_odds: bool = True):
         self._live = live
+        self._with_odds = with_odds
         self.fetched_at = time.time()
 
     def live_state(self, home: str, away: str):
@@ -63,6 +64,8 @@ class _FakeProvider:
         )
 
     def odds(self, home: str, away: str):
+        if not self._with_odds:
+            return []
         # Complete 1x2 set with enough EV to generate at least one rec
         # Model probs ≈ home 0.51, draw 0.25, away 0.24 — inflate home odds
         return [
@@ -153,6 +156,9 @@ class TestFixtureRows:
             total = row["p_home"] + row["p_draw"] + row["p_away"]
             assert total == pytest.approx(1.0, abs=1e-6)
 
+    def test_empty_dataframe_returns_empty_list(self, model, fixtures_df):
+        assert fixture_rows(model, fixtures_df.iloc[0:0]) == []
+
 
 # ---------------------------------------------------------------------------
 # prematch_slate tests
@@ -215,6 +221,13 @@ class TestPrematchSlate:
         expected = sum(r["stake"] for r in result["recommendations"])
         assert result["total_stake"] == pytest.approx(expected, abs=1e-9)
 
+    def test_empty_odds_returns_empty_slate(self, model, fixtures_df):
+        result = self._run(model, fixtures_df, {})
+        assert result["recommendations"] == []
+        assert result["total_stake"] == 0.0
+        assert result["n_candidates"] == 0
+        assert result["warnings"] == []
+
 
 # ---------------------------------------------------------------------------
 # live_snapshot tests
@@ -238,7 +251,7 @@ class TestLiveSnapshot:
         expected_keys = {
             "status", "minute", "score", "reds",
             "p_home", "p_draw", "p_away", "p_over25",
-            "recommendations", "fetched_at",
+            "recommendations", "warnings", "fetched_at",
         }
         assert set(result.keys()) == expected_keys
 
@@ -289,3 +302,16 @@ class TestLiveSnapshot:
         provider = _FakeProvider(live=True)
         result = self._run(model, provider)
         assert result["fetched_at"] == pytest.approx(provider.fetched_at, abs=1.0)
+
+    def test_live_path_no_warnings_when_odds_present(self, model):
+        provider = _FakeProvider(live=True)
+        result = self._run(model, provider)
+        assert result["warnings"] == []
+
+    def test_live_path_warns_when_provider_has_no_odds(self, model):
+        provider = _FakeProvider(live=True, with_odds=False)
+        result = self._run(model, provider)
+        assert result["recommendations"] == []
+        assert result["warnings"] == [
+            "provider returned no odds; recommendations unavailable"
+        ]

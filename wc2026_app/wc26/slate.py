@@ -14,7 +14,24 @@ import pandas as pd
 
 from .edge import build_candidates
 from .live import live_grid
-from .recommend import recommend
+from .recommend import Recommendation, recommend
+
+
+def _rec_to_dict(r: Recommendation) -> Dict[str, Any]:
+    """Flatten a Recommendation into the JSON-able dict the dashboard consumes."""
+    return {
+        "match": r.candidate.match,
+        "market": r.candidate.market,
+        "line": r.candidate.line,
+        "outcome": r.candidate.outcome,
+        "odds": r.candidate.odds,
+        "model_p": r.candidate.p_win,
+        "fair_p": r.candidate.fair_prob,
+        "ev": r.candidate.ev,
+        "tier": r.candidate.tier,
+        "stake": r.stake,
+        "stake_fraction": r.stake_fraction,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -24,6 +41,9 @@ from .recommend import recommend
 
 def fixture_rows(model, fixtures_df: pd.DataFrame) -> List[Dict[str, Any]]:
     """Predict every row of *fixtures_df* and return a list of result dicts.
+
+    *fixtures_df* must have columns date, home_team, away_team and neutral
+    (as produced by `wc26.data.fixtures`).
 
     Each dict has keys: date, home, away, neutral, p_home, p_draw, p_away,
     p_over25, p_btts.  Probabilities are floats in (0, 1).
@@ -115,25 +135,8 @@ def prematch_slate(
         require_market_edge=require_market_edge,
     )
 
-    rec_dicts = [
-        {
-            "match": r.candidate.match,
-            "market": r.candidate.market,
-            "line": r.candidate.line,
-            "outcome": r.candidate.outcome,
-            "odds": r.candidate.odds,
-            "model_p": r.candidate.p_win,
-            "fair_p": r.candidate.fair_prob,
-            "ev": r.candidate.ev,
-            "tier": r.candidate.tier,
-            "stake": r.stake,
-            "stake_fraction": r.stake_fraction,
-        }
-        for r in recs
-    ]
-
     return {
-        "recommendations": rec_dicts,
+        "recommendations": [_rec_to_dict(r) for r in recs],
         "total_stake": sum(r.stake for r in recs),
         "n_candidates": len(all_candidates),
         "warnings": warnings,
@@ -178,8 +181,11 @@ def live_snapshot(
 
     _, _, over25 = live.totals(2.5)
 
+    warnings: List[str] = []
     match_label = f"{home} v {away}"
     quotes = provider.odds(home, away)
+    if not quotes:
+        warnings.append("provider returned no odds; recommendations unavailable")
     odds_rows = [q.as_row() for q in quotes]
     candidates = build_candidates(live, match_label, odds_rows)
 
@@ -190,23 +196,6 @@ def live_snapshot(
         min_ev=min_ev,
     )
 
-    rec_dicts = [
-        {
-            "match": r.candidate.match,
-            "market": r.candidate.market,
-            "line": r.candidate.line,
-            "outcome": r.candidate.outcome,
-            "odds": r.candidate.odds,
-            "model_p": r.candidate.p_win,
-            "fair_p": r.candidate.fair_prob,
-            "ev": r.candidate.ev,
-            "tier": r.candidate.tier,
-            "stake": r.stake,
-            "stake_fraction": r.stake_fraction,
-        }
-        for r in recs
-    ]
-
     return {
         "status": state.status,
         "minute": float(state.minute),
@@ -216,6 +205,7 @@ def live_snapshot(
         "p_draw": float(live.draw),
         "p_away": float(live.away_win),
         "p_over25": float(over25),
-        "recommendations": rec_dicts,
+        "recommendations": [_rec_to_dict(r) for r in recs],
+        "warnings": warnings,
         "fetched_at": state.fetched_at,
     }
