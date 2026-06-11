@@ -111,9 +111,21 @@ Any change to the training data, weights, `--years`, `--asof`, or `--model` prod
 | Subsequent fits (warm cache) | ~1 second. |
 | `--no-cache` fit | ~7 seconds every time. |
 
+## Dashboard
+
+A Streamlit web UI exposes the same model, slate, and live-pricing logic as the CLI. Install Streamlit, then launch from `wc2026_app/`:
+
+```bash
+pip install streamlit
+streamlit run dashboard.py
+```
+
+See [Dashboard](dashboard.md) for the full tab walkthrough, sidebar controls, quota guidance, and troubleshooting.
+
 ## Next steps
 
 - [CLI reference](cli-reference.md) — every command, flag, and the odds CSV format.
 - [API keys](api-keys.md) — wire up live data providers.
 - [Methodology](methodology.md) — what the model does and what to expect from it.
 - [Limitations](limitations.md) — where the model is thin and what it does not claim.
+- [Dashboard](dashboard.md) — Streamlit web UI guide.

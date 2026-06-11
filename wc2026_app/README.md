@@ -95,3 +95,4 @@ Full documentation lives in [`docs/`](docs/):
 - [API keys](docs/api-keys.md) — obtaining and validating live-provider keys.
 - [Methodology](docs/methodology.md) — the full pipeline with cited evidence.
 - [Limitations](docs/limitations.md) — where the model is thin and what it does not claim.
+- [Dashboard](docs/dashboard.md) — Streamlit web UI: install, launch, tab walkthrough, quota guidance, troubleshooting.
