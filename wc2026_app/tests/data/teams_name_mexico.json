@@ -1,0 +1,29 @@
+{
+  "get": "teams",
+  "parameters": {"name": "Mexico"},
+  "errors": [],
+  "results": 1,
+  "paging": {"current": 1, "total": 1},
+  "response": [
+    {
+      "team": {
+        "id": 16,
+        "name": "Mexico",
+        "code": "MEX",
+        "country": "World",
+        "founded": 1927,
+        "national": true,
+        "logo": "https://media.api-sports.io/football/teams/16.png"
+      },
+      "venue": {
+        "id": null,
+        "name": null,
+        "address": null,
+        "city": null,
+        "capacity": null,
+        "surface": null,
+        "image": null
+      }
+    }
+  ]
+}

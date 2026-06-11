@@ -1,0 +1,27 @@
+{
+  "get": "players",
+  "parameters": {"team": "16", "season": "2025", "page": "2"},
+  "errors": [],
+  "results": 1,
+  "paging": {"current": 2, "total": 2},
+  "response": [
+    {
+      "player": {
+        "id": 5555,
+        "name": "A. Guardado",
+        "firstname": "Andres",
+        "lastname": "Guardado",
+        "age": 38,
+        "nationality": "Mexico"
+      },
+      "statistics": [
+        {
+          "team": {"id": 16, "name": "Mexico"},
+          "league": {"id": 1, "name": "World Cup", "season": 2025},
+          "games": {"appearences": 3, "minutes": 210},
+          "goals": {"total": 0, "assists": 2}
+        }
+      ]
+    }
+  ]
+}

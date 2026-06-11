@@ -1,0 +1,25 @@
+{
+  "get": "fixtures",
+  "parameters": {"team": "16", "last": "2", "status": "FT"},
+  "errors": [],
+  "results": 2,
+  "paging": {"current": 1, "total": 1},
+  "response": [
+    {
+      "fixture": {"id": 1035816, "date": "2025-06-01T20:00:00+00:00", "status": {"short": "FT", "elapsed": 90}},
+      "teams": {
+        "home": {"id": 16, "name": "Mexico", "winner": true},
+        "away": {"id": 7, "name": "Brazil", "winner": false}
+      },
+      "goals": {"home": 2, "away": 1}
+    },
+    {
+      "fixture": {"id": 1035817, "date": "2025-06-05T20:00:00+00:00", "status": {"short": "FT", "elapsed": 90}},
+      "teams": {
+        "home": {"id": 18, "name": "Argentina", "winner": false},
+        "away": {"id": 16, "name": "Mexico", "winner": true}
+      },
+      "goals": {"home": 0, "away": 1}
+    }
+  ]
+}

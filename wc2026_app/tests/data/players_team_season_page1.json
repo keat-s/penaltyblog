@@ -1,0 +1,51 @@
+{
+  "get": "players",
+  "parameters": {"team": "16", "season": "2025", "page": "1"},
+  "errors": [],
+  "results": 2,
+  "paging": {"current": 1, "total": 2},
+  "response": [
+    {
+      "player": {
+        "id": 747,
+        "name": "H. Lozano",
+        "firstname": "Hirving",
+        "lastname": "Lozano",
+        "age": 29,
+        "nationality": "Mexico"
+      },
+      "statistics": [
+        {
+          "team": {"id": 16, "name": "Mexico"},
+          "league": {"id": 1, "name": "World Cup", "season": 2025},
+          "games": {"appearences": 5, "minutes": 380},
+          "goals": {"total": 3, "assists": 1}
+        },
+        {
+          "team": {"id": 16, "name": "Mexico"},
+          "league": {"id": 10, "name": "Friendlies", "season": 2025},
+          "games": {"appearences": 2, "minutes": 120},
+          "goals": {"total": 1, "assists": 0}
+        }
+      ]
+    },
+    {
+      "player": {
+        "id": 2297,
+        "name": "R. Jimenez",
+        "firstname": "Raul",
+        "lastname": "Jimenez",
+        "age": 33,
+        "nationality": "Mexico"
+      },
+      "statistics": [
+        {
+          "team": {"id": 16, "name": "Mexico"},
+          "league": {"id": 1, "name": "World Cup", "season": 2025},
+          "games": {"appearences": 5, "minutes": 420},
+          "goals": {"total": 2, "assists": 0}
+        }
+      ]
+    }
+  ]
+}
