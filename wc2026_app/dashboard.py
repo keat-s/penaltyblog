@@ -156,9 +156,11 @@ def _make_counted_provider(name: str, env_var: str | None):
             st.session_state.api_call_count += 1
             return raw.live_state(home, away)
 
-        def odds(self, home, away):
+        def odds(self, home, away, date=None):
             st.session_state.api_call_count += 1
-            return raw.odds(home, away)
+            # Pre-match fixtures are only findable by date — without it the
+            # adapters' live-fixture search misses and returns no quotes.
+            return raw.odds(home, away, date=date)
 
     return _Counted()
 
@@ -256,14 +258,23 @@ with tab_prematch:
         if provider is None:
             st.error("Provider unavailable (csv-upload selected, key missing, or init failed). Use the CSV upload below instead.")
         else:
+            label_to_date = {
+                _match_label(row): str(pd.Timestamp(row["date"]).date())
+                for _, row in _all_fixtures.iterrows()
+            }
             odds_rows_by_match: dict[str, list[dict]] = {}
             with st.spinner("Fetching odds…"):
                 for label in selected_matches:
                     parts = label.split(" v ", 1)
                     if len(parts) == 2:
                         home, away = parts
-                        quotes = provider.odds(home, away)
+                        quotes = provider.odds(home, away, date=label_to_date.get(label))
                         odds_rows_by_match[label] = [q.as_row() for q in quotes]
+                        if not quotes:
+                            st.warning(
+                                f"{label}: provider returned no odds — team naming may "
+                                "differ at the provider, or odds aren't posted yet."
+                            )
 
             result = slate.prematch_slate(
                 _model,
