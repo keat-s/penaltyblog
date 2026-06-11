@@ -130,18 +130,21 @@ with st.sidebar:
 # Provider call counter wrapper
 # ---------------------------------------------------------------------------
 
-def _make_counted_provider():
-    """Build the provider, wrapping live_state / odds so each call
-    increments st.session_state.api_call_count."""
-    if provider_name == "csv-upload":
+def _make_counted_provider(name: str, env_var: str | None):
+    """Build provider *name*, wrapping live_state / odds so each call
+    increments st.session_state.api_call_count.
+
+    *env_var* is the environment variable holding the API key (None for
+    keyless providers). Returns None if the provider cannot be built.
+    """
+    if name == "csv-upload":
         # CSV upload path — no live provider needed; return None
         return None
 
-    _env_var = _key_env.get(provider_name)
-    _key_val = os.environ.get(_env_var) if _env_var else None
+    key_val = os.environ.get(env_var) if env_var else None
 
     try:
-        raw = make_provider(provider_name, api_key=_key_val)
+        raw = make_provider(name, api_key=key_val)
     except Exception:
         return None
 
@@ -175,15 +178,20 @@ def _get_model(asof_str: str, years: float, kind: str):
     return fit_cached(train, kind=kind)
 
 
+@st.cache_data(show_spinner=False)
+def _get_fixtures(date_from: str, days: int) -> pd.DataFrame:
+    """Cached upcoming-fixtures window (underlying results CSV also cached)."""
+    return fixtures(_load_results(), date_from=date_from, days=days)
+
+
 _YEARS = 6.0
 _asof_str = str(asof)
 _model = _get_model(_asof_str, _YEARS, model_kind)
 
 # ---------------------------------------------------------------------------
-# All upcoming fixtures (used across tabs)
+# All upcoming fixtures (used across tabs), keyed on asof
 # ---------------------------------------------------------------------------
-_results_df = _load_results()
-_all_fixtures = fixtures(_results_df, date_from=None, days=365 * 2)
+_all_fixtures = _get_fixtures(_asof_str, 365 * 2)
 
 # Label helper
 def _match_label(row) -> str:
@@ -209,7 +217,7 @@ with tab_fixtures:
         key="fixtures_days",
     )
 
-    fx_window = fixtures(_results_df, date_from=str(asof), days=days_ahead)
+    fx_window = _get_fixtures(_asof_str, days_ahead)
 
     if fx_window.empty:
         st.info("No fixtures found in this window.")
@@ -242,9 +250,9 @@ with tab_prematch:
     fetch_btn = st.button("Fetch odds & build slate", disabled=(not selected_matches))
 
     if fetch_btn and selected_matches:
-        provider = _make_counted_provider()
-        if provider is None and provider_name != "csv-upload":
-            st.error("Provider unavailable (key missing or init failed). Use CSV upload instead.")
+        provider = _make_counted_provider(provider_name, _key_env.get(provider_name))
+        if provider is None:
+            st.error("Provider unavailable (csv-upload selected, key missing, or init failed). Use the CSV upload below instead.")
         else:
             odds_rows_by_match: dict[str, list[dict]] = {}
             with st.spinner("Fetching odds…"):
@@ -332,7 +340,7 @@ with tab_live:
 
     # Today's fixtures
     today_str = str(date.today())
-    _today_fx = fixtures(_results_df, date_from=today_str, days=1)
+    _today_fx = _get_fixtures(today_str, 1)
     _today_labels = [_match_label(row) for _, row in _today_fx.iterrows()]
 
     _live_label_options = _today_labels if _today_labels else ["(no fixtures today)"]
@@ -358,16 +366,24 @@ with tab_live:
     else:
         _live_home, _live_away = "", ""
 
-    # Check if provider key is present
+    # Resolve neutral flag from today's fixtures (host home games are not neutral)
+    _live_neutral = True
+    if _live_home and _live_away and not _today_fx.empty:
+        _fx_match = _today_fx[
+            (_today_fx["home_team"] == _live_home)
+            & (_today_fx["away_team"] == _live_away)
+        ]
+        if not _fx_match.empty:
+            _live_neutral = bool(_fx_match.iloc[0]["neutral"])
+
+    # Live feed needs an API provider with its key set; csv-upload has no
+    # live feed, so it falls through to the manual input form.
     _env_var_live = _key_env.get(provider_name)
-    _key_available = (
-        provider_name == "csv-upload" or
-        (_env_var_live is not None and bool(os.environ.get(_env_var_live)))
-    )
+    _key_available = _env_var_live is not None and bool(os.environ.get(_env_var_live))
 
     if not _key_available:
-        # Manual fallback when no provider key
-        st.warning("No provider API key — using manual input mode.")
+        # Manual fallback: no live provider (key missing, or csv-upload selected)
+        st.warning("No live API provider available — using manual input mode.")
         with st.form("live_manual_form"):
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -381,7 +397,7 @@ with tab_live:
             submitted = st.form_submit_button("Update live grid")
 
         if submitted and _live_home and _live_away:
-            pre = _model.predict(_live_home, _live_away, neutral_venue=True)
+            pre = _model.predict(_live_home, _live_away, neutral_venue=_live_neutral)
             live = live_grid(
                 pre.home_goal_expectation,
                 pre.away_goal_expectation,
@@ -411,7 +427,7 @@ with tab_live:
                 st.info("Select or enter a fixture above.")
                 return
 
-            provider = _make_counted_provider()
+            provider = _make_counted_provider(provider_name, _key_env.get(provider_name))
             if provider is None:
                 st.error("Provider could not be initialised.")
                 return
@@ -421,7 +437,7 @@ with tab_live:
                 provider,
                 _live_home,
                 _live_away,
-                neutral=True,
+                neutral=_live_neutral,
                 bankroll=bankroll,
                 kelly_fraction=kelly_fraction,
                 min_ev=min_ev,
