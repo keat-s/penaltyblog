@@ -76,7 +76,7 @@ Reprices a match mid-game and, when odds are available, recommends in-play.
 
 The tab works in two modes depending on whether a live API provider key is set.
 
-**Provider mode (key set).** A `@st.fragment` auto-refreshes at the interval set in the sidebar. Each refresh calls the provider's `live_state` endpoint once, incrementing the API-call counter. The fragment shows score, minute, red cards, win-probability bars (1X2 + Over 2.5), and any +EV recommendations.
+**Provider mode (key set).** A `@st.fragment` auto-refreshes at the interval set in the sidebar. Each refresh calls the provider's `live_state` endpoint and, when the match is live, the `odds` endpoint as well — two API requests per tick, both incrementing the API-call counter (one request per tick when the match is not live). The fragment shows score, minute, red cards, win-probability bars (1X2 + Over 2.5), and any +EV recommendations.
 
 **Manual fallback mode (key missing or `csv-upload` selected).** A warning banner reads `No live API provider available — using manual input mode.` A form accepts minute (0–120), home/away score, and home/away red cards. Submitting the form runs the live-pricing calculation locally using pre-match goal expectations conditioned on the entered state. No API call is made.
 
@@ -107,7 +107,7 @@ The free tier for API-Football is 100 requests per day. See [API keys](api-keys.
 Actions that consume API requests:
 
 - **Pre-match slate → Fetch odds & build slate**: one request per selected fixture, per button click.
-- **Live tab auto-refresh**: one request per refresh tick (interval set in the sidebar, default 15 seconds).
+- **Live tab auto-refresh**: two requests per refresh tick while the match is live (`live_state` + `odds`); one request per tick when the match is not live. Interval set in the sidebar, default 15 seconds.
 
 Actions that do not consume API requests:
 
@@ -116,7 +116,7 @@ Actions that do not consume API requests:
 - Using manual fallback mode on the Live tab.
 - Anything on the Fixtures or Knockout tabs.
 
-The API-call counter in the sidebar tracks total calls for the current page session. It resets on reload. Budget live-tab usage carefully on the free tier: at the 15-second default, a single live match watched for 45 minutes consumes 180 requests — well over the 100/day free limit. Increase the refresh interval or switch to manual mode for light usage.
+The API-call counter in the sidebar tracks total calls for the current page session. It resets on reload. Budget live-tab usage carefully on the free tier: at the 15-second default, a single live match watched for 45 minutes is ~180 refresh ticks at two requests each — roughly 360 requests, well over the 100/day free limit. Increase the refresh interval or switch to manual mode for light usage.
 
 ## Troubleshooting
 
@@ -144,7 +144,7 @@ The model cache lives at `~/.cache/wc26/models/`. If it is empty or stale, delet
 rm -rf ~/.cache/wc26/models
 ```
 
-Alternatively, the cache is bypassed automatically when the training inputs change (as-of date, model kind, or results data). To force a refit without deleting the cache, change the as-of date by one day and change it back.
+Then restart the dashboard. Both cache layers — the on-disk model cache and Streamlit's in-process `st.cache_resource` — are keyed on the training inputs (as-of date, model kind, results data), so revisiting the same inputs returns the same cached model; deleting `~/.cache/wc26/models` and restarting is the reliable way to force a refit. The in-process layer can also be cleared without a restart via **Clear cache** in the Streamlit menu (top-right).
 
 **Stale results data.**
 Refresh from the `wc2026_app/` directory before launching the dashboard:
