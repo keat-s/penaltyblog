@@ -18,9 +18,11 @@ from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
+from penaltyblog.betting.kelly import kelly_criterion
+
 from wc26.cache import fit_cached
 from wc26.data import fixtures, load_results, training_data
-from wc26 import knockout, slate
+from wc26 import knockout, props, slate
 from wc26.live import live_grid
 from wc26.providers import make_provider
 
@@ -162,6 +164,24 @@ def _make_counted_provider(name: str, env_var: str | None):
             # adapters' live-fixture search misses and returns no quotes.
             return raw.odds(home, away, date=date)
 
+        # Props endpoints (api-football only). Disk-cached upstream, so the
+        # session counter records calls made, not raw HTTP requests.
+        def player_goal_stats(self, team_name, season):
+            if not hasattr(raw, "player_goal_stats"):
+                raise RuntimeError(
+                    f"provider '{raw.name}' does not support player statistics"
+                )
+            st.session_state.api_call_count += 1
+            return raw.player_goal_stats(team_name, season)
+
+        def team_stat_records(self, team_name, last_n=20, stat="corners"):
+            if not hasattr(raw, "team_stat_records"):
+                raise RuntimeError(
+                    f"provider '{raw.name}' does not support match statistics"
+                )
+            st.session_state.api_call_count += 1
+            return raw.team_stat_records(team_name, last_n=last_n, stat=stat)
+
     return _Counted()
 
 
@@ -205,8 +225,8 @@ def _match_label(row) -> str:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_fixtures, tab_prematch, tab_live, tab_knockout = st.tabs(
-    ["Fixtures", "Pre-match slate", "Live", "Knockout"]
+tab_fixtures, tab_prematch, tab_live, tab_knockout, tab_props = st.tabs(
+    ["Fixtures", "Pre-match slate", "Live", "Knockout", "Props"]
 )
 
 # ── Tab 1: Fixtures ──────────────────────────────────────────────────────────
@@ -581,3 +601,281 @@ with tab_knockout:
             st.error(f"Could not compute knockout probabilities: {exc}")
     else:
         st.info("Enter both team names to compute knockout probabilities.")
+
+# ── Tab 5: Props ──────────────────────────────────────────────────────────────
+with tab_props:
+    st.subheader("Prop markets — experimental")
+    st.caption(
+        "Prop markets carry **higher bookmaker margins and lower limits** than "
+        "main markets, and our research base contains no verified evidence of "
+        "exploitable inefficiency in them. Treat everything below as fair prices "
+        "under stated assumptions, not proven edges. "
+        "See [docs/props.md](docs/props.md)."
+    )
+
+    _props_labels = [_match_label(row) for _, row in _all_fixtures.iterrows()]
+
+    if not _props_labels:
+        st.info("No upcoming fixtures found — adjust the as-of date in the sidebar.")
+    else:
+        props_label = st.selectbox(
+            "Fixture", options=_props_labels, key="props_fixture"
+        )
+        _props_home, _props_away = props_label.split(" v ", 1)
+
+        # Neutral-aware team lambdas from the cached match model (same
+        # pattern as the Live tab: host home games are not neutral).
+        _props_fx = _all_fixtures[
+            (_all_fixtures["home_team"] == _props_home)
+            & (_all_fixtures["away_team"] == _props_away)
+        ]
+        _props_neutral = (
+            bool(_props_fx.iloc[0]["neutral"]) if not _props_fx.empty else True
+        )
+
+        try:
+            _props_grid = _model.predict(
+                _props_home, _props_away, neutral_venue=_props_neutral
+            )
+            _team_lambdas = {
+                _props_home: _props_grid.home_goal_expectation,
+                _props_away: _props_grid.away_goal_expectation,
+            }
+        except Exception as exc:
+            _team_lambdas = None
+            st.error(f"Could not price this fixture with the model: {exc}")
+
+        # ── Anytime scorer ─────────────────────────────────────────────────
+        st.markdown("### Anytime scorer")
+        st.caption(
+            "P(score) = 1 − exp(−λ_team × share). Shares come from season goal "
+            "counts (Laplace-smoothed) — the **weakest input** in this model: "
+            "international scoring data is thin and lineups are not modelled."
+        )
+
+        props_season = st.selectbox(
+            "Season (player stats)", options=[2024, 2025], index=1, key="props_season"
+        )
+
+        if st.button(
+            "Fetch player stats (costs ~2-6 API requests per team, cached 24h)",
+            key="props_scorer_btn",
+            disabled=_team_lambdas is None,
+        ):
+            provider = _make_counted_provider(provider_name, _key_env.get(provider_name))
+            if provider is None:
+                st.error(
+                    "Provider unavailable — select api-football in the sidebar "
+                    "and set its API key."
+                )
+            else:
+                try:
+                    with st.spinner("Fetching player stats…"):
+                        _stats_by_team = {
+                            team: provider.player_goal_stats(team, props_season)
+                            for team in (_props_home, _props_away)
+                        }
+                    st.session_state["props_scorer_data"] = {
+                        "fixture": props_label,
+                        "season": props_season,
+                        "stats": _stats_by_team,
+                    }
+                except RuntimeError as exc:
+                    st.error(f"Provider error: {exc}")
+
+        _scorer_data = st.session_state.get("props_scorer_data")
+        if (
+            _team_lambdas is not None
+            and _scorer_data
+            and _scorer_data["fixture"] == props_label
+        ):
+            if _scorer_data["season"] != props_season:
+                st.info("Season changed — fetch player stats again to update.")
+            for team in (_props_home, _props_away):
+                players = _scorer_data["stats"].get(team, [])
+                st.markdown(f"**{team}** — model λ = {_team_lambdas[team]:.2f}")
+                if not players:
+                    st.info(
+                        f"No player stats returned for {team} — team naming may "
+                        "differ at the provider, or no season data exists."
+                    )
+                    continue
+
+                _apps = {p["player"]: p["appearances"] for p in players}
+                _n_thin = sum(1 for a in _apps.values() if a < 5)
+                if _n_thin:
+                    st.warning(
+                        f"{_n_thin} player(s) have fewer than 5 appearances — "
+                        "their shares are mostly smoothing, not signal."
+                    )
+
+                _table = props.scorer_table(
+                    _team_lambdas[team],
+                    {p["player"]: p["goals"] for p in players},
+                )
+                _df = pd.DataFrame(_table)
+                _df["appearances"] = _df["player"].map(_apps)
+                _df["odds"] = 0.0
+                edited = st.data_editor(
+                    _df,
+                    key=f"props_scorer_editor_{team}",
+                    hide_index=True,
+                    use_container_width=True,
+                    disabled=[c for c in _df.columns if c != "odds"],
+                    column_config={
+                        "odds": st.column_config.NumberColumn(
+                            "odds", min_value=0.0, step=0.05,
+                            help="Enter bookmaker anytime-scorer odds (decimal).",
+                        ),
+                    },
+                )
+
+                _priced = edited[edited["odds"] > 1.0]
+                if not _priced.empty:
+                    _out = _priced[["player", "p_score", "fair_odds", "odds"]].copy()
+                    _out["ev"] = [
+                        props.ev(p, o)
+                        for p, o in zip(_out["p_score"], _out["odds"])
+                    ]
+                    _out["stake"] = [
+                        kelly_criterion(o, p, fraction=kelly_fraction).stake * bankroll
+                        for p, o in zip(_out["p_score"], _out["odds"])
+                    ]
+                    st.markdown("Priced selections (EV and fractional-Kelly stake):")
+                    st.dataframe(_out, use_container_width=True, hide_index=True)
+
+        # ── Corners / Shots on target ──────────────────────────────────────
+        st.divider()
+        st.markdown("### Corners / Shots on target")
+        st.caption(
+            "Per-team for/against rates from recent finished fixtures, shrunk "
+            "toward the global mean (weight n/(n+k)); totals from an independent "
+            "Poisson grid. Quality depends entirely on how much fixture data has "
+            "been collected."
+        )
+
+        props_stat = st.selectbox(
+            "Stat",
+            options=["corners", "shots_on_goal"],
+            format_func=lambda s: {"corners": "Corners", "shots_on_goal": "Shots on target"}[s],
+            key="props_stat",
+        )
+        props_last_n = st.slider(
+            "Finished fixtures per team", min_value=5, max_value=30, value=15,
+            key="props_last_n",
+        )
+
+        if st.button(
+            f"Collect team stats (≈2×{props_last_n} API requests on first run, cached after)",
+            key="props_count_btn",
+        ):
+            provider = _make_counted_provider(provider_name, _key_env.get(provider_name))
+            if provider is None:
+                st.error(
+                    "Provider unavailable — select api-football in the sidebar "
+                    "and set its API key."
+                )
+            else:
+                try:
+                    with st.spinner("Collecting fixture statistics…"):
+                        _records = []
+                        for team in (_props_home, _props_away):
+                            _records.extend(
+                                provider.team_stat_records(
+                                    team, last_n=props_last_n, stat=props_stat
+                                )
+                            )
+                    st.session_state["props_count_data"] = {
+                        "fixture": props_label,
+                        "stat": props_stat,
+                        "records": _records,
+                    }
+                except RuntimeError as exc:
+                    st.error(f"Provider error: {exc}")
+
+        _count_data = st.session_state.get("props_count_data")
+        if (
+            _count_data
+            and _count_data["fixture"] == props_label
+            and _count_data["stat"] == props_stat
+        ):
+            _records = _count_data["records"]
+            if not _records:
+                st.info(
+                    "No statistics records collected — team naming may differ at "
+                    "the provider, or no finished fixtures had statistics."
+                )
+            else:
+                _rates = props.fit_team_rates(_records)
+                _n_home = _rates.counts.get(_props_home, 0)
+                _n_away = _rates.counts.get(_props_away, 0)
+
+                sc1, sc2 = st.columns(2)
+                sc1.metric(f"{_props_home} samples", _n_home)
+                sc2.metric(f"{_props_away} samples", _n_away)
+                if _n_home < 8 or _n_away < 8:
+                    st.warning(
+                        "Thin data: fewer than 8 sampled fixtures for at least one "
+                        "team — rates are shrunk hard toward the global mean "
+                        "(0 samples means the team name did not match any record "
+                        "and the global mean is used outright)."
+                    )
+
+                _lam_h, _lam_a = props.predict_lambdas(
+                    _rates, _props_home, _props_away
+                )
+                st.markdown(
+                    f"Expected {props_stat.replace('_', ' ')}: "
+                    f"**{_props_home} {_lam_h:.2f}**, **{_props_away} {_lam_a:.2f}** "
+                    f"(total {_lam_h + _lam_a:.2f})"
+                )
+
+                _cgrid = props.count_grid(_lam_h, _lam_a)
+                _default_line = 9.5 if props_stat == "corners" else 8.5
+                props_line = st.number_input(
+                    "Total line",
+                    min_value=0.5,
+                    value=_default_line,
+                    step=0.5,
+                    key=f"props_line_{props_stat}",
+                )
+                _ou = props.over_under(_cgrid, props_line)
+
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "side": "Over",
+                                "probability": _ou["over"],
+                                "fair_odds": _ou["fair_over"],
+                            },
+                            {
+                                "side": "Under",
+                                "probability": _ou["under"],
+                                "fair_odds": _ou["fair_under"],
+                            },
+                        ]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                if _ou["push"] > 0:
+                    st.caption(f"Push probability (stake refund): {_ou['push']:.1%}")
+
+                oc1, oc2 = st.columns(2)
+                with oc1:
+                    _odds_over = st.number_input(
+                        "Over odds", min_value=0.0, value=0.0, step=0.05,
+                        key=f"props_over_odds_{props_stat}",
+                    )
+                    if _odds_over > 1.0:
+                        _ev_over = props.ev(_ou["over"], _odds_over, push=_ou["push"])
+                        st.caption(f"EV: {_ev_over:+.3f}")
+                with oc2:
+                    _odds_under = st.number_input(
+                        "Under odds", min_value=0.0, value=0.0, step=0.05,
+                        key=f"props_under_odds_{props_stat}",
+                    )
+                    if _odds_under > 1.0:
+                        _ev_under = props.ev(_ou["under"], _odds_under, push=_ou["push"])
+                        st.caption(f"EV: {_ev_under:+.3f}")

@@ -100,6 +100,10 @@ Output includes advance probability and fair decimal odds for each side, a full 
 
 No API key is needed; the calculation runs entirely from the cached model.
 
+### Props
+
+Prices anytime scorer, corners, and shots-on-target props — model assumptions, per-button API request costs, and caveats are documented separately in [Props](props.md).
+
 ## Quota guidance
 
 The free tier for API-Football is 100 requests per day. See [API keys](api-keys.md) for details.

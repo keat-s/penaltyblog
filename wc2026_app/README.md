@@ -96,3 +96,4 @@ Full documentation lives in [`docs/`](docs/):
 - [Methodology](docs/methodology.md) — the full pipeline with cited evidence.
 - [Limitations](docs/limitations.md) — where the model is thin and what it does not claim.
 - [Dashboard](docs/dashboard.md) — Streamlit web UI: install, launch, tab walkthrough, quota guidance, troubleshooting.
+- [Props](docs/props.md) — anytime scorer, corners, shots on target: model assumptions, request costs, caveats.
