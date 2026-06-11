@@ -116,7 +116,7 @@ Actions that do not consume API requests:
 - Using manual fallback mode on the Live tab.
 - Anything on the Fixtures or Knockout tabs.
 
-The API-call counter in the sidebar tracks total calls for the current page session. It resets on reload. Budget live-tab usage carefully on the free tier: at the 15-second default, a single live match watched for 45 minutes is ~180 refresh ticks at two requests each — roughly 360 requests, well over the 100/day free limit. Increase the refresh interval or switch to manual mode for light usage.
+The API-call counter in the sidebar tracks total calls for the current page session. It resets on reload. Budget live-tab usage carefully on the free tier: at the 15-second default, a single live match watched for 45 minutes is ~180 refresh ticks at two requests each — roughly 360 requests, well over the 100/day free limit. At a 60-second interval the same 45 minutes is ~90 requests — just under the limit. Increase the refresh interval or switch to manual mode for light usage.
 
 ## Troubleshooting
 

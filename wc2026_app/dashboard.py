@@ -149,7 +149,8 @@ def _make_counted_provider(name: str, env_var: str | None):
         return None
 
     class _Counted:
-        name = raw.name
+        def __init__(self):
+            self.name = raw.name
 
         def live_state(self, home, away):
             st.session_state.api_call_count += 1
@@ -191,6 +192,7 @@ _model = _get_model(_asof_str, _YEARS, model_kind)
 # ---------------------------------------------------------------------------
 # All upcoming fixtures (used across tabs), keyed on asof
 # ---------------------------------------------------------------------------
+# Deliberately broad window so the pre-match multiselect covers the whole tournament.
 _all_fixtures = _get_fixtures(_asof_str, 365 * 2)
 
 # Label helper
