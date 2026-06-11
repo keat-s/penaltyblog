@@ -80,31 +80,6 @@ class TestTeamId:
 # ---------------------------------------------------------------------------
 
 class TestPlayerGoalStats:
-    def _setup_two_page(self, tmp_path) -> ApiFootballProvider:
-        """Provider wired to return two pages of player data."""
-        page1 = _load("players_team_season_page1.json")
-        page2 = _load("players_team_season_page2.json")
-        p = _provider(tmp_path)
-
-        # team_id lookup
-        teams_resp = _load("teams_name_mexico.json")["response"]
-
-        import wc26.providers.apifootball as mod
-        from unittest.mock import patch
-
-        real_get_json_calls = []
-
-        def fake_get_json(url, params=None, headers=None, timeout=10.0):
-            real_get_json_calls.append((url, params))
-            if "teams" in url:
-                return {"errors": [], "response": teams_resp, "paging": {"current": 1, "total": 1}}, 0.1
-            pg = (params or {}).get("page", 1)
-            data = page1 if int(pg) == 1 else page2
-            return data, 0.1
-
-        p._fake_get_json = fake_get_json
-        return p, fake_get_json, real_get_json_calls
-
     def test_aggregates_across_competitions(self, tmp_path):
         """Lozano appears in two stat blocks; goals must be summed."""
         page1 = _load("players_team_season_page1.json")
@@ -402,6 +377,30 @@ class TestTeamStatRecords:
         by_team = {r["team"]: r["value"] for r in records}
         assert by_team["Mexico"] == 7
         assert by_team["Brazil"] == 5
+
+    def test_empty_statistics_fixture_emits_no_records(self, tmp_path):
+        """A fixture whose statistics list is empty must not produce any records."""
+        fx_payload = _load("fixtures_team_last2.json")
+        teams_resp = _load("teams_name_mexico.json")["response"]
+
+        # Use only one fixture to keep the setup simple
+        single_fx = fx_payload.copy()
+        single_fx["response"] = [fx_payload["response"][0]]
+
+        p = _provider(tmp_path)
+
+        def fake_get(path, **params):
+            if path == "/teams":
+                return teams_resp
+            if path == "/fixtures":
+                return single_fx["response"]
+            # fixture_statistics endpoint returns empty list → no stats
+            return []
+
+        p._get = MagicMock(side_effect=fake_get)
+        records = p.team_stat_records("Mexico", last_n=1, stat="corners")
+
+        assert records == [], f"Expected no records for empty statistics, got {records}"
 
     def test_fit_team_rates_compatible(self, tmp_path):
         """Records from team_stat_records must work with props.fit_team_rates."""

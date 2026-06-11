@@ -66,6 +66,24 @@ class ApiFootballProvider:
         digest = hashlib.sha256(canon.encode()).hexdigest()
         return self._cache_dir / f"{digest}.json"
 
+    def _cache_read(self, cache_file: Path, ttl_seconds: Optional[float]) -> Optional[dict]:
+        """Read a cache file and return its parsed contents if still valid, else None."""
+        if not cache_file.exists():
+            return None
+        try:
+            cached = json.loads(cache_file.read_text())
+            written_at = cached.get("_written_at", 0)
+            if ttl_seconds is None or (time.time() - written_at) < ttl_seconds:
+                return cached
+        except (json.JSONDecodeError, KeyError):
+            pass  # corrupt cache → re-fetch
+        return None
+
+    def _cache_write(self, cache_file: Path, payload: dict) -> None:
+        """Write *payload* (must include _written_at) to *cache_file*."""
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(payload))
+
     def _get_cached(self, path: str, ttl_seconds: Optional[float], **params) -> list:
         """Return cached JSON response, fetching from API only on a miss or expiry.
 
@@ -73,21 +91,44 @@ class ApiFootballProvider:
         re-fetched (suitable for finished-fixture statistics).
         """
         cache_file = self._cache_key(path, params)
-        if cache_file.exists():
-            try:
-                cached = json.loads(cache_file.read_text())
-                written_at = cached.get("_written_at", 0)
-                if ttl_seconds is None or (time.time() - written_at) < ttl_seconds:
-                    return cached["response"]
-            except (json.JSONDecodeError, KeyError):
-                pass  # corrupt cache → re-fetch
+        cached = self._cache_read(cache_file, ttl_seconds)
+        if cached is not None:
+            return cached["response"]
 
         data = self._get(path, **params)
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(
-            json.dumps({"_written_at": time.time(), "response": data})
-        )
+        self._cache_write(cache_file, {"_written_at": time.time(), "response": data})
         return data
+
+    def _get_cached_page(
+        self, path: str, ttl_seconds: Optional[float], **params
+    ) -> tuple[list, int]:
+        """Fetch one paged request, returning (response_list, total_pages).
+
+        Caches the full paging metadata alongside the response so that
+        subsequent calls for the same page are served from disk.
+        """
+        cache_file = self._cache_key(path, params)
+        cached = self._cache_read(cache_file, ttl_seconds)
+        if cached is not None:
+            return cached["response"], cached.get("total_pages", 1)
+
+        payload, rtt = get_json(
+            f"{BASE_URL}{path}",
+            params={k: v for k, v in params.items()},
+            headers={"x-apisports-key": self.api_key},
+            timeout=self.timeout,
+        )
+        self.last_rtt = rtt
+        errors = payload.get("errors")
+        if errors and (errors if isinstance(errors, list) else list(errors.values())):
+            raise RuntimeError(f"api-football {path} error: {errors}")
+        rows = payload.get("response", [])
+        total_pages = payload.get("paging", {}).get("total", 1)
+        self._cache_write(
+            cache_file,
+            {"_written_at": time.time(), "response": rows, "total_pages": total_pages},
+        )
+        return rows, total_pages
 
     # ------------------------------------------------------------------
     # Props data endpoints
@@ -121,47 +162,11 @@ class ApiFootballProvider:
         ttl = 24 * 3600
         aggregated: Dict[str, dict] = {}
 
-        def _fetch_page(page: int) -> tuple[list, int]:
-            """Fetch one page; returns (response_list, total_pages)."""
-            payload, rtt = get_json(
-                f"{BASE_URL}/players",
-                params={"team": tid, "season": season, "page": page},
-                headers={"x-apisports-key": self.api_key},
-                timeout=self.timeout,
-            )
-            self.last_rtt = rtt
-            errors = payload.get("errors")
-            if errors and (errors if isinstance(errors, list) else list(errors.values())):
-                raise RuntimeError(f"api-football /players error: {errors}")
-            total_pages = payload.get("paging", {}).get("total", 1)
-            return payload.get("response", []), total_pages
-
-        # Use disk cache per page
-        def _cached_page(page: int) -> tuple[list, int]:
-            cache_file = self._cache_key(
-                "/players", {"team": str(tid), "season": str(season), "page": str(page)}
-            )
-            if cache_file.exists():
-                try:
-                    cached = json.loads(cache_file.read_text())
-                    written_at = cached.get("_written_at", 0)
-                    if (time.time() - written_at) < ttl:
-                        return cached["response"], cached.get("total_pages", 1)
-                except (json.JSONDecodeError, KeyError):
-                    pass
-
-            rows, total_pages = _fetch_page(page)
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-            cache_file.write_text(
-                json.dumps(
-                    {"_written_at": time.time(), "response": rows, "total_pages": total_pages}
-                )
-            )
-            return rows, total_pages
-
         page = 1
         while True:
-            rows, total_pages = _cached_page(page)
+            rows, total_pages = self._get_cached_page(
+                "/players", ttl, team=str(tid), season=str(season), page=str(page)
+            )
             for entry in rows:
                 pname = entry["player"]["name"]
                 if pname not in aggregated:
@@ -218,13 +223,17 @@ class ApiFootballProvider:
                 stats = self.fixture_statistics(fixture_id)
             except Exception:
                 continue
+            # Skip fixtures where the API returned no statistics at all.
+            if not stats:
+                continue
             # Emit one record per team side so fit_team_rates gets both
             # the for-side (team scored X) and the against-side (opponent
             # conceded X) observations from the same match.
             for team, opponent in [(home_name, away_name), (away_name, home_name)]:
-                team_stats = stats.get(team, {})
-                value = team_stats.get(stat, 0)
-                records.append({"team": team, "opponent": opponent, "value": value})
+                team_stats = stats.get(team)
+                if not team_stats:
+                    continue
+                records.append({"team": team, "opponent": opponent, "value": team_stats[stat]})
         return records
 
     @staticmethod
