@@ -164,9 +164,17 @@ class ApiFootballProvider:
 
         page = 1
         while True:
-            rows, total_pages = self._get_cached_page(
-                "/players", ttl, team=str(tid), season=str(season), page=str(page)
-            )
+            try:
+                rows, total_pages = self._get_cached_page(
+                    "/players", ttl, team=str(tid), season=str(season), page=str(page)
+                )
+            except RuntimeError:
+                # Free plans cap the page parameter at 3 (verified live
+                # 2026-06-12). Keep the pages we already have rather than
+                # losing everything; page 1 failures are real errors.
+                if page > 1:
+                    break
+                raise
             for entry in rows:
                 pname = entry["player"]["name"]
                 if pname not in aggregated:
@@ -200,7 +208,7 @@ class ApiFootballProvider:
         return result
 
     def team_stat_records(
-        self, team_name: str, last_n: int = 20, stat: str = "corners"
+        self, team_name: str, last_n: int = 20, stat: str = "corners", season: int = 2024
     ) -> List[dict]:
         """Return {team, opponent, value} records for both sides of each fixture.
 
@@ -208,12 +216,24 @@ class ApiFootballProvider:
         calls fixture_statistics (cached) for each.  Both the for-side and
         against-side observations are returned so fit_team_rates can compute
         both for_ and against_ rates.
+
+        *season* is only used on plans that reject the `last` fixtures
+        parameter (free tier, verified live 2026-06-12): those fall back to
+        listing the whole season and slicing the most recent matches —
+        meaning free-tier counts come from *season*, not the latest games.
         """
         tid = self.team_id(team_name)
         if tid is None:
             return []
 
-        fixtures = self._get_cached("/fixtures", None, team=tid, last=last_n, status="FT")
+        try:
+            fixtures = self._get_cached("/fixtures", None, team=tid, last=last_n, status="FT")
+        except RuntimeError:
+            rows = self._get_cached(
+                "/fixtures", None, team=tid, season=season, status="FT"
+            )
+            rows.sort(key=lambda f: f["fixture"]["date"], reverse=True)
+            fixtures = rows[:last_n]
         records: List[dict] = []
         for fx in fixtures:
             fixture_id = fx["fixture"]["id"]

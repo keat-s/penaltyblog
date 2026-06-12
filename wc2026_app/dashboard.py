@@ -653,8 +653,13 @@ with tab_props:
             "international scoring data is thin and lineups are not modelled."
         )
 
+        # Free API-Football plans only serve seasons 2022-2024 (verified live).
         props_season = st.selectbox(
-            "Season (player stats)", options=[2024, 2025], index=1, key="props_season"
+            "Season (player stats)",
+            options=[2023, 2024, 2025],
+            index=1,
+            key="props_season",
+            help="2025 requires a paid API-Football plan; free plans serve 2022-2024.",
         )
 
         if st.button(

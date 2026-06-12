@@ -43,6 +43,16 @@ Practical consequence: the count model **gets better the more you use it**. Ever
 
 The sidebar API-call counter increments once per button-triggered provider call; it counts calls made, not raw HTTP requests (cached calls may cost zero requests).
 
+### Free-tier restrictions (verified live, 2026-06-12)
+
+API-Football's free plan enforces three limits that shape what the Props tab can show:
+
+- **Player stats serve seasons 2022–2024 only.** Season 2025 (and the 2026 tournament itself) requires a paid plan. The season selector defaults to 2024.
+- **Squad listings cap at 3 pages.** Large squads are truncated to roughly the first 60 player-competition entries; the aggregation keeps whatever pages it could fetch.
+- **The `last`-N fixtures parameter is rejected.** The provider falls back to listing the chosen season (default 2024) and slicing the most recent finished matches — so free-tier corner/shot rates reflect that season, not this week's form.
+
+On a paid plan all three limits disappear and the same code paths use the unrestricted parameters.
+
 ## Honest caveats
 
 State these plainly before staking anything — they are stronger versions of the caveats in [methodology](methodology.md#honest-expectations):
