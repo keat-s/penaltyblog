@@ -85,6 +85,25 @@ def test_apifootball_live_state(monkeypatch):
     assert state.status == "live"
 
 
+# Payload shape from the real live=all response, 2026-06-13: API-Football
+# names the hosts "USA" while the results dataset says "United States".
+AF_LIVE_USA_FIXTURE = {
+    "fixture": {"id": 1489370, "status": {"short": "1H", "elapsed": 28}},
+    "teams": {"home": {"id": 2384, "name": "USA"}, "away": {"id": 30, "name": "Paraguay"}},
+    "goals": {"home": 1, "away": 0},
+    "events": [],
+}
+
+
+def test_apifootball_team_alias(monkeypatch):
+    p = _af_provider(monkeypatch, {"/fixtures": [AF_LIVE_USA_FIXTURE]})
+    state = p.live_state("United States", "Paraguay")
+    assert state is not None
+    assert (state.score_home, state.score_away) == (1, 0)
+    # unrelated teams must still miss
+    assert p.live_state("Uruguay", "Paraguay") is None
+
+
 AF_PREMATCH_ODDS = [
     {
         "bookmakers": [

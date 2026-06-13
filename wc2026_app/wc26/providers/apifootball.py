@@ -22,6 +22,19 @@ BASE_URL = "https://v3.football.api-sports.io"
 ENV_KEY = "WC26_APIFOOTBALL_KEY"
 _DEFAULT_CACHE_DIR = Path.home() / ".cache" / "wc26" / "apifootball"
 
+# Dataset (martj42) names that diverge from API-Football's, normalised form.
+# Verified live 2026-06-13: the live=all payload names the hosts "USA", not
+# "United States", so exact/substring matching alone misses them.
+_TEAM_ALIASES = {
+    "united states": "usa",
+}
+
+
+def _norm_team(name: str) -> str:
+    n = name.casefold().replace("&", "and").strip()
+    return _TEAM_ALIASES.get(n, n)
+
+
 # Map API-Football type strings to our field names.
 _STAT_MAP = {
     "Corner Kicks": "corners",
@@ -258,9 +271,10 @@ class ApiFootballProvider:
 
     @staticmethod
     def _team_match(fixture: dict, home: str, away: str) -> bool:
-        fh = fixture["teams"]["home"]["name"].casefold()
-        fa = fixture["teams"]["away"]["name"].casefold()
-        return home.casefold() in fh and away.casefold() in fa
+        fh = _norm_team(fixture["teams"]["home"]["name"])
+        fa = _norm_team(fixture["teams"]["away"]["name"])
+        h, a = _norm_team(home), _norm_team(away)
+        return (h in fh or fh in h) and (a in fa or fa in a)
 
     def find_fixture(self, home: str, away: str, date: Optional[str] = None) -> Optional[dict]:
         """Find a fixture by team names: live matches first, then by date."""
