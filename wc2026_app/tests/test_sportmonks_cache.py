@@ -118,7 +118,9 @@ class TestTeamPlayerGoalsCache:
         by_name = {r["player"]: r for r in result}
         assert by_name["Player One"]["goals"] == 5
         assert by_name["Player Two"]["goals"] == 2
-        assert set(by_name["Player One"].keys()) == {"player", "goals", "minutes", "appearances"}
+        assert set(by_name["Player One"].keys()) == {
+            "player", "goals", "minutes", "appearances", "born",
+        }
 
     def test_cache_hit_skips_all_network_calls(self, tmp_path):
         p = _provider(tmp_path)

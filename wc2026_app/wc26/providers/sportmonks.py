@@ -24,6 +24,10 @@ _DEFAULT_CACHE_DIR = Path.home() / ".cache" / "wc26" / "sportmonks_players"
 # 7-day TTL: squad rosters and season stats change slowly.
 _PLAYER_CACHE_TTL = 7 * 24 * 3600
 
+# Bump when the cached record shape changes so old files auto-invalidate.
+# v2: added `born` to team_player_goals records.
+_CACHE_SCHEMA = 2
+
 RED_CARD_TYPE_IDS = {20, 21}  # REDCARD, YELLOWREDCARD
 
 
@@ -49,6 +53,8 @@ class SportmonksProvider:
             return None
         try:
             cached = json.loads(cache_file.read_text())
+            if cached.get("_schema") != _CACHE_SCHEMA:
+                return None  # shape changed → ignore old file, re-fetch
             written_at = cached.get("_written_at", 0)
             if ttl_seconds is None or (time.time() - written_at) < ttl_seconds:
                 return cached["data"]
@@ -57,9 +63,11 @@ class SportmonksProvider:
         return None
 
     def _cache_write(self, cache_file: Path, data: list) -> None:
-        """Write *data* to *cache_file* with a timestamp."""
+        """Write *data* to *cache_file* with a timestamp + schema version."""
         cache_file.parent.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(json.dumps({"_written_at": time.time(), "data": data}))
+        cache_file.write_text(
+            json.dumps({"_schema": _CACHE_SCHEMA, "_written_at": time.time(), "data": data})
+        )
 
     def _get(self, path: str, **params) -> list:
         params["api_token"] = self.api_key
@@ -366,6 +374,8 @@ class SportmonksProvider:
             pid, pname = player.get("id"), player.get("name")
             if not pid or not pname:
                 continue
+            dob = player.get("date_of_birth")  # "YYYY-MM-DD"
+            born = int(dob[:4]) if dob else None
             stats = self._player_stats(pid)
             goals = minutes = apps = 0
             for season in stats:
@@ -380,7 +390,13 @@ class SportmonksProvider:
                     elif tname == "Appearances":
                         apps += int(total)
             out.append(
-                {"player": pname, "goals": goals, "minutes": minutes, "appearances": apps}
+                {
+                    "player": pname,
+                    "goals": goals,
+                    "minutes": minutes,
+                    "appearances": apps,
+                    "born": born,
+                }
             )
         return out
 

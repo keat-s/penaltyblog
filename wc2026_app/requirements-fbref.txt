@@ -1,0 +1,5 @@
+# Optional extra: enables `wc26 scorers --source merged`, which supplements
+# Sportmonks WC/WC-Qualifying goals with FBref European Championship goals.
+# Not needed for any core command. Install with:  pip install -r requirements-fbref.txt
+soccerdata>=1.8.0   # Cloudflare-aware, rate-limited, disk-caching FBref client
+rapidfuzz>=3.0.0    # birth-year + fuzzy name matching across the two sources

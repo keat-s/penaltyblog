@@ -221,15 +221,29 @@ def cmd_scorers(args) -> None:
     grid = np.array(predict_fixture(model, args.team, args.opponent, not args.not_neutral).grid)
     team_lambda = float(sum(i * grid[i, :].sum() for i in range(grid.shape[0])))
 
-    provider = SportmonksProvider()
-    pg = provider.team_player_goals(args.team, max_players=args.max_players)
+    pg = SportmonksProvider().team_player_goals(args.team, max_players=args.max_players)
+    note = "sportmonks WC+WCQ"
+    if args.source == "merged":
+        # supplement with FBref Euro goals, joined on birth year
+        seasons = [s.strip() for s in args.fbref_seasons.split(",") if s.strip()]
+        try:
+            from .playermatch import merge_goals  # needs the optional 'rapidfuzz'
+            from .providers.fbref import FbrefProvider  # needs optional 'soccerdata'
+
+            fb = FbrefProvider().team_player_goals(args.team, seasons=seasons)
+            pg = merge_goals(pg, fb)
+            enriched = sum(1 for p in pg if p.get("matched_fbref"))
+            note = f"merged: sportmonks WC+WCQ + fbref Euro ({enriched} players enriched)"
+        except Exception as e:  # FBref/soccerdata is best-effort
+            print(f"warning: fbref merge failed ({e}); falling back to sportmonks only")
+
     goals = {r["player"]: r["goals"] for r in pg if r["goals"] > 0}
     if not goals:
         print(f"no player goal data for {args.team}")
         return
     print(
         f"{args.team} anytime scorer vs {args.opponent} "
-        f"(lambda={team_lambda:.2f}, {len(goals)} scorers):"
+        f"(lambda={team_lambda:.2f}, {len(goals)} scorers, {note}):"
     )
     for r in scorer_table(team_lambda, goals)[: args.top]:
         print(
@@ -312,6 +326,14 @@ def main(argv=None) -> None:
     sc.add_argument("--not-neutral", action="store_true")
     sc.add_argument("--max-players", type=int, default=26)
     sc.add_argument("--top", type=int, default=15)
+    sc.add_argument(
+        "--source", default="sportmonks", choices=["sportmonks", "merged"],
+        help="merged adds FBref Euro goals (needs the 'soccerdata' extra)",
+    )
+    sc.add_argument(
+        "--fbref-seasons", default="2024",
+        help="comma-separated FBref seasons for --source merged (e.g. 2023,2024,2025)",
+    )
 
     xg = sub.add_parser("xg", help="shot-based xG proxy for finished matches (sportmonks)")
     xg.add_argument("--since", required=True, help="window start YYYY-MM-DD")
