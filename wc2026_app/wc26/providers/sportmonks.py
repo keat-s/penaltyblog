@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from .base import LiveState, OddsQuote
 from .http import get_json
-from .mapping import map_market, parse_outcome
+from .mapping import map_market, normalize_team, parse_outcome
 
 BASE_URL = "https://api.sportmonks.com/v3/football"
 ENV_KEY = "WC26_SPORTMONKS_KEY"
@@ -36,8 +36,32 @@ class SportmonksProvider:
         self.last_rtt = rtt
         if "error" in payload:
             raise RuntimeError(f"sportmonks {path} error: {payload['error']}")
+        msg = payload.get("message")
+        if msg and "data" not in payload:
+            raise RuntimeError(f"sportmonks {path}: {msg}")
         data = payload.get("data", [])
         return data if isinstance(data, list) else [data]
+
+    def _get_paged(self, path: str, max_pages: int = 20, **params) -> list:
+        """Follow Sportmonks pagination, accumulating `data` across pages."""
+        params["api_token"] = self.api_key
+        rows: list = []
+        page = 1
+        while page <= max_pages:
+            params["page"] = page
+            payload, rtt = get_json(
+                f"{BASE_URL}{path}", params=params, timeout=self.timeout
+            )
+            self.last_rtt = rtt
+            msg = payload.get("message")
+            if msg and "data" not in payload:
+                raise RuntimeError(f"sportmonks {path}: {msg}")
+            rows.extend(payload.get("data", []) or [])
+            pg = payload.get("pagination") or {}
+            if not pg.get("has_more"):
+                break
+            page += 1
+        return rows
 
     @staticmethod
     def _sides(fixture: dict) -> Optional[dict]:
@@ -164,3 +188,139 @@ class SportmonksProvider:
                 )
             )
         return quotes
+
+    # --- results backfill -------------------------------------------------
+
+    @staticmethod
+    def _final_score(fixture: dict) -> Optional[dict]:
+        """{'home': goals, 'away': goals} from the CURRENT score, or None."""
+        score = {}
+        for s in fixture.get("scores", []) or []:
+            if s.get("description") == "CURRENT":
+                inner = s.get("score", {})
+                part = str(inner.get("participant", "")).lower()
+                if part in ("home", "away"):
+                    score[part] = int(inner.get("goals") or 0)
+        return score if len(score) == 2 else None
+
+    def results(self, date_from: str, date_to: str) -> List[dict]:
+        """Finished matches in [date_from, date_to] as result rows.
+
+        Each row: {date, home_team, away_team, home_score, away_score,
+        fixture_id}. Only fixtures that are actually finished (a CURRENT score
+        is present) are returned; team names are normalized to the dataset
+        spelling. Scheduled/in-play fixtures are skipped.
+        """
+        rows = self._get_paged(
+            f"/fixtures/between/{date_from}/{date_to}",
+            include="participants;scores",
+            per_page=50,
+        )
+        out = []
+        for fx in rows:
+            sides = self._sides(fx)
+            score = self._final_score(fx)
+            if not sides or not score:
+                continue
+            # require a finished match: result_info is set only post-match
+            if not fx.get("result_info"):
+                continue
+            out.append(
+                {
+                    "date": str(fx.get("starting_at", ""))[:10],
+                    "home_team": normalize_team(sides["home"]["name"]),
+                    "away_team": normalize_team(sides["away"]["name"]),
+                    "home_score": score["home"],
+                    "away_score": score["away"],
+                    "fixture_id": fx["id"],
+                }
+            )
+        return out
+
+    # --- shot statistics (for the xG proxy) -------------------------------
+
+    # Sportmonks statistic type names we use to approximate xG.
+    _SHOT_TYPES = {
+        "Big Chances Created": "big_chances_created",
+        "Shots Insidebox": "shots_insidebox",
+        "Shots Outsidebox": "shots_outsidebox",
+        "Shots On Target": "shots_on_target",
+        "Shots Total": "shots_total",
+    }
+
+    # --- player goal stats (for anytime-scorer props) --------------------
+
+    def find_team_id(self, name: str) -> Optional[int]:
+        """Resolve a national-team name to its Sportmonks team id."""
+        rows = self._get(f"/teams/search/{name}")
+        for t in rows:
+            if t.get("name", "").casefold() == name.casefold():
+                return t["id"]
+        return rows[0]["id"] if rows else None
+
+    def team_player_goals(
+        self, team: str, max_players: int = 30
+    ) -> List[dict]:
+        """Per-player goal tallies for a national team's current squad.
+
+        Aggregates each player's `Goals`/`Minutes Played`/`Appearances` across
+        the seasons Sportmonks exposes (club + international), which is enough
+        signal for goal *shares* — the props model only uses relative goals.
+        Returns [{player, goals, minutes, appearances}] like the API-Football
+        adapter, so it drops straight into `props.scorer_table`.
+        """
+        team_id = self.find_team_id(team)
+        if team_id is None:
+            return []
+        squad = self._get(f"/teams/{team_id}", include="players.player")
+        members = (squad[0].get("players") if squad else None) or []
+
+        out = []
+        for m in members[:max_players]:
+            player = m.get("player") or {}
+            pid, pname = player.get("id"), player.get("name")
+            if not pid or not pname:
+                continue
+            rows = self._get(f"/players/{pid}", include="statistics.details.type")
+            goals = minutes = apps = 0
+            for season in (rows[0].get("statistics") if rows else []) or []:
+                for d in season.get("details", []) or []:
+                    tname = (d.get("type") or {}).get("name")
+                    val = d.get("value") or {}
+                    total = val.get("total") or 0
+                    if tname == "Goals":
+                        goals += int(total)
+                    elif tname == "Minutes Played":
+                        minutes += int(total)
+                    elif tname == "Appearances":
+                        apps += int(total)
+            out.append(
+                {"player": pname, "goals": goals, "minutes": minutes, "appearances": apps}
+            )
+        return out
+
+    def match_shot_stats(self, fixture_id: int) -> Optional[dict]:
+        """Per-side shot counts for one fixture: {'home': {...}, 'away': {...}}.
+
+        Returns None if statistics or participant sides are unavailable.
+        """
+        rows = self._get(
+            f"/fixtures/{fixture_id}", include="statistics.type;participants"
+        )
+        if not rows:
+            return None
+        fx = rows[0]
+        sides = self._sides(fx)
+        if not sides:
+            return None
+        id_to_side = {sides["home"]["id"]: "home", sides["away"]["id"]: "away"}
+        out = {"home": {}, "away": {}}
+        for s in fx.get("statistics", []) or []:
+            tname = (s.get("type") or {}).get("name")
+            key = self._SHOT_TYPES.get(tname)
+            if not key:
+                continue
+            side = id_to_side.get(s.get("participant_id"))
+            if side:
+                out[side][key] = (s.get("data") or {}).get("value")
+        return out if (out["home"] or out["away"]) else None

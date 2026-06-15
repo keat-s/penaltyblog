@@ -17,8 +17,16 @@ def get_json(
 ) -> Tuple[dict, float]:
     """GET a JSON document; returns (payload, rtt_seconds)."""
     if params:
-        url = f"{url}?{urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})}"
-    req = urllib.request.Request(url, headers=headers or {})
+        # Sportmonks include/filter syntax uses literal ';' ',' ':' separators;
+        # urlencoding them (%3B etc.) makes the API reject the request (403).
+        query = urllib.parse.urlencode(
+            {k: v for k, v in params.items() if v is not None}, safe=";,:"
+        )
+        url = f"{url}?{query}"
+    # Some APIs (Sportmonks) WAF-block the default "Python-urllib" agent (403).
+    final_headers = {"User-Agent": "wc26/1.0", "Accept": "application/json"}
+    final_headers.update(headers or {})
+    req = urllib.request.Request(url, headers=final_headers)
     start = time.perf_counter()
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         payload = json.loads(resp.read().decode("utf-8"))

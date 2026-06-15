@@ -16,6 +16,23 @@ _MARKET_PATTERNS = [
 ]
 
 
+# Sportmonks participant names -> martj42/international_results canonical names.
+# Only the divergent ones; anything not listed passes through unchanged.
+TEAM_NAME_MAP = {
+    "Cape Verde Islands": "Cape Verde",
+    "Congo DR": "DR Congo",
+    "Curacao": "Curaçao",
+    "Côte d'Ivoire": "Ivory Coast",
+    "Korea Republic": "South Korea",
+    "Türkiye": "Turkey",
+}
+
+
+def normalize_team(vendor_name: str) -> str:
+    """Map a vendor team name onto the results-dataset spelling."""
+    return TEAM_NAME_MAP.get(vendor_name.strip(), vendor_name.strip())
+
+
 def map_market(vendor_name: str) -> Optional[str]:
     name = vendor_name.strip().lower()
     for pattern, key in _MARKET_PATTERNS:

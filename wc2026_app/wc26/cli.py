@@ -42,6 +42,26 @@ def cmd_update(args) -> None:
     played = df.dropna(subset=["home_score"])
     print(f"results: {len(df)} rows, latest played {played['date'].max().date()}")
 
+    if getattr(args, "source", "martj42") == "sportmonks":
+        from .backfill import backfill_from_sportmonks
+
+        today = pd.Timestamp(args.asof)
+        date_from = args.since or str((today - pd.Timedelta(days=args.window)).date())
+        date_to = args.until or str(today.date())
+        print(f"backfilling finished matches {date_from} -> {date_to} from sportmonks...")
+        summary = backfill_from_sportmonks(
+            date_from, date_to, overwrite=args.overwrite
+        )
+        print(
+            f"  provided {summary['provided']}, filled {summary['filled']}, "
+            f"corrected {summary['corrected']}"
+        )
+        if summary["unmatched"]:
+            print(f"  unmatched ({len(summary['unmatched'])}): {summary['unmatched']}")
+        df = data_mod.load_results()
+        played = df.dropna(subset=["home_score"])
+        print(f"  now: latest played {played['date'].max().date()}")
+
 
 def cmd_fixtures(args) -> None:
     df, model = _fit(args)
@@ -191,6 +211,28 @@ def cmd_advance(args) -> None:
         print(f"  to-qualify EV: {args.home} @ {odds_h} -> {ev_h:+.3f} | {args.away} @ {odds_a} -> {ev_a:+.3f}")
 
 
+def cmd_xg(args) -> None:
+    from .providers.sportmonks import SportmonksProvider
+    from .xg import estimate_xg
+
+    provider = SportmonksProvider()
+    rows = provider.results(args.since, args.until)
+    if not rows:
+        print("no finished matches in window")
+        return
+    print(f"xG proxy for {len(rows)} finished matches ({args.since} -> {args.until}):")
+    for r in rows:
+        stats = provider.match_shot_stats(r["fixture_id"])
+        if not stats:
+            continue
+        xh, xa = estimate_xg(stats["home"], stats["away"])
+        label = _match_label(r["home_team"], r["away_team"])
+        print(
+            f"  {r['date']} {label:<40} "
+            f"score {r['home_score']}-{r['away_score']}  xG {xh:.2f}-{xa:.2f}"
+        )
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="wc26", description=__doc__)
     p.add_argument("--asof", default=str(pd.Timestamp.today().date()))
@@ -202,7 +244,15 @@ def main(argv=None) -> None:
     p.add_argument("--min-ev", type=float, default=0.02)
     sub = p.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("update")
+    upd = sub.add_parser("update")
+    upd.add_argument(
+        "--source", default="martj42", choices=["martj42", "sportmonks"],
+        help="sportmonks also backfills finished scores from the live API",
+    )
+    upd.add_argument("--since", help="backfill window start YYYY-MM-DD (default asof-window)")
+    upd.add_argument("--until", help="backfill window end YYYY-MM-DD (default asof)")
+    upd.add_argument("--window", type=int, default=14, help="default backfill lookback days")
+    upd.add_argument("--overwrite", action="store_true", help="also correct existing scores")
 
     fx = sub.add_parser("fixtures")
     fx.add_argument("--days", type=int, default=7)
@@ -229,6 +279,10 @@ def main(argv=None) -> None:
     bench.add_argument("--interval", type=float, default=5.0)
     bench.add_argument("--odds", action="store_true", help="also poll odds endpoint")
 
+    xg = sub.add_parser("xg", help="shot-based xG proxy for finished matches (sportmonks)")
+    xg.add_argument("--since", required=True, help="window start YYYY-MM-DD")
+    xg.add_argument("--until", required=True, help="window end YYYY-MM-DD")
+
     adv = sub.add_parser("advance", help="knockout tie: P(advance) incl. ET + pens")
     adv.add_argument("--home", required=True)
     adv.add_argument("--away", required=True)
@@ -245,6 +299,7 @@ def main(argv=None) -> None:
         "live": cmd_live,
         "advance": cmd_advance,
         "benchmark": cmd_benchmark,
+        "xg": cmd_xg,
     }[args.command](args)
 
 
