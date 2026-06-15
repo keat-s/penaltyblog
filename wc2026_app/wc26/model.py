@@ -38,3 +38,15 @@ def fit_model(train: TrainingData, kind: str = "dixon_coles"):
 def predict_fixture(model, home_team: str, away_team: str, neutral: bool = True):
     """Predict a fixture, returning a FootballProbabilityGrid."""
     return model.predict(home_team, away_team, neutral_venue=bool(neutral))
+
+
+def try_predict_fixture(model, home_team: str, away_team: str, neutral: bool = True):
+    """Predict a fixture, or return None if a team is absent from training data.
+
+    Lets callers skip a single unknown/misspelled team instead of aborting a
+    whole batch (e.g. one bad row in an odds file).
+    """
+    try:
+        return predict_fixture(model, home_team, away_team, neutral)
+    except ValueError:
+        return None

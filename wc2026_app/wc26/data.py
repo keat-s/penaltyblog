@@ -40,12 +40,42 @@ class TrainingData:
     neutral_venue: np.ndarray
 
 
+def merge_upstream(old: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
+    """Merge a fresh upstream frame over the cached one, keeping backfilled scores.
+
+    The upstream source (martj42) is authoritative wherever it has a score, but
+    lags a day or two on the newest finals — which we backfill locally. A naive
+    overwrite of the cache would discard those backfilled scores. Here `new` is
+    the base (latest schedule); for any match upstream still has as NaN, an
+    existing score from `old` is preserved.
+    """
+    key = ["date", "home_team", "away_team"]
+    prior = old.dropna(subset=["home_score", "away_score"]).set_index(key)
+    merged = new.copy()
+    idx = merged.set_index(key).index
+    for col in ("home_score", "away_score"):
+        missing = merged[col].isna().to_numpy()
+        backfilled = prior[col].reindex(idx).to_numpy()
+        merged.loc[missing, col] = backfilled[missing]
+    return merged
+
+
 def load_results(cache: Path | str = DEFAULT_CACHE, refresh: bool = False) -> pd.DataFrame:
     """Download (or read cached) international results CSV."""
     cache = Path(cache).expanduser()
     if refresh or not cache.exists():
         cache.parent.mkdir(parents=True, exist_ok=True)
-        urllib.request.urlretrieve(RESULTS_URL, cache)
+        if refresh and cache.exists():
+            # Merge fresh upstream over the cache so locally backfilled scores
+            # (which upstream lags on) survive the refresh.
+            old = pd.read_csv(cache, parse_dates=["date"])
+            tmp = cache.with_suffix(".new")
+            urllib.request.urlretrieve(RESULTS_URL, tmp)
+            new = pd.read_csv(tmp, parse_dates=["date"])
+            merge_upstream(old, new).to_csv(cache, index=False)
+            tmp.unlink(missing_ok=True)
+        else:
+            urllib.request.urlretrieve(RESULTS_URL, cache)
     return pd.read_csv(cache, parse_dates=["date"])
 
 
@@ -74,7 +104,7 @@ def training_data(
     weights = np.exp(-xi * days_ago)
 
     competitive = train["tournament"].str.contains(
-        COMPETITIVE_PATTERN, case=False, regex=True
+        COMPETITIVE_PATTERN, case=False, regex=True, na=False
     ).to_numpy()
     involves_host = (
         train["home_team"].isin(HOSTS) | train["away_team"].isin(HOSTS)

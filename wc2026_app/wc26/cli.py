@@ -22,7 +22,7 @@ from .cache import fit_cached
 from .edge import build_candidates
 from .knockout import advance_probabilities
 from .live import live_grid_from_model
-from .model import predict_fixture
+from .model import predict_fixture, try_predict_fixture
 from .recommend import recommend
 
 
@@ -67,7 +67,10 @@ def cmd_fixtures(args) -> None:
     df, model = _fit(args)
     fx = data_mod.fixtures(df, date_from=args.asof, days=args.days)
     for _, r in fx.iterrows():
-        g = predict_fixture(model, r["home_team"], r["away_team"], r["neutral"])
+        g = try_predict_fixture(model, r["home_team"], r["away_team"], r["neutral"])
+        if g is None:
+            print(f"skip {_match_label(r['home_team'], r['away_team'])}: team not in training data")
+            continue
         print(
             f"{r['date'].date()} {_match_label(r['home_team'], r['away_team']):<45}"
             f" 1X2 {g.home_win:.3f}/{g.draw:.3f}/{g.away_win:.3f}"
@@ -102,7 +105,10 @@ def cmd_recs(args) -> None:
                 "Check team spelling matches the results dataset."
             )
             neutral = True
-        grid = predict_fixture(model, home, away, neutral)
+        grid = try_predict_fixture(model, home, away, neutral)
+        if grid is None:
+            print(f"skip '{match}': team not in training data (check spelling)")
+            continue
         candidates += build_candidates(grid, match, rows.to_dict("records"))
 
     recs = recommend(
