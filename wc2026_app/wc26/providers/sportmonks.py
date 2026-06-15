@@ -7,7 +7,10 @@ trial. Rate limits are per-entity per-hour; 429 responses carry retry_after.
 
 from __future__ import annotations
 
+import json
 import os
+import time
+from pathlib import Path
 from typing import List, Optional
 
 from .base import LiveState, OddsQuote
@@ -16,6 +19,10 @@ from .mapping import map_market, normalize_team, parse_outcome
 
 BASE_URL = "https://api.sportmonks.com/v3/football"
 ENV_KEY = "WC26_SPORTMONKS_KEY"
+_DEFAULT_CACHE_DIR = Path.home() / ".cache" / "wc26" / "sportmonks_players"
+
+# 7-day TTL: squad rosters and season stats change slowly.
+_PLAYER_CACHE_TTL = 7 * 24 * 3600
 
 RED_CARD_TYPE_IDS = {20, 21}  # REDCARD, YELLOWREDCARD
 
@@ -23,12 +30,36 @@ RED_CARD_TYPE_IDS = {20, 21}  # REDCARD, YELLOWREDCARD
 class SportmonksProvider:
     name = "sportmonks"
 
-    def __init__(self, api_key: Optional[str] = None, timeout: float = 10.0):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        timeout: float = 10.0,
+        cache_dir: Optional[Path] = None,
+    ):
         self.api_key = api_key or os.environ.get(ENV_KEY, "")
         if not self.api_key:
             raise ValueError(f"API key required: pass api_key or set {ENV_KEY}")
         self.timeout = timeout
         self.last_rtt: Optional[float] = None
+        self._cache_dir = Path(cache_dir) if cache_dir is not None else _DEFAULT_CACHE_DIR
+
+    def _cache_read(self, cache_file: Path, ttl_seconds: Optional[float]) -> Optional[list]:
+        """Return cached list if the file exists and is still valid, else None."""
+        if not cache_file.exists():
+            return None
+        try:
+            cached = json.loads(cache_file.read_text())
+            written_at = cached.get("_written_at", 0)
+            if ttl_seconds is None or (time.time() - written_at) < ttl_seconds:
+                return cached["data"]
+        except (json.JSONDecodeError, KeyError):
+            pass  # corrupt cache → re-fetch
+        return None
+
+    def _cache_write(self, cache_file: Path, data: list) -> None:
+        """Write *data* to *cache_file* with a timestamp."""
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps({"_written_at": time.time(), "data": data}))
 
     def _get(self, path: str, **params) -> list:
         params["api_token"] = self.api_key
@@ -251,15 +282,53 @@ class SportmonksProvider:
     # --- player goal stats (for anytime-scorer props) --------------------
 
     def find_team_id(self, name: str) -> Optional[int]:
-        """Resolve a national-team name to its Sportmonks team id."""
+        """Resolve a national-team name to its Sportmonks team id.
+
+        Result is cached indefinitely (team ids are stable).
+        """
+        cache_file = self._cache_dir / "teams" / f"{name.lower().replace(' ', '_')}.json"
+        cached = self._cache_read(cache_file, ttl_seconds=None)
+        if cached is not None:
+            return cached[0] if cached else None
+
         rows = self._get(f"/teams/search/{name}")
+        team_id: Optional[int] = None
         for t in rows:
             if t.get("name", "").casefold() == name.casefold():
-                return t["id"]
-        return rows[0]["id"] if rows else None
+                team_id = t["id"]
+                break
+        if team_id is None and rows:
+            team_id = rows[0]["id"]
+
+        self._cache_write(cache_file, [team_id] if team_id is not None else [])
+        return team_id
+
+    def _squad_members(self, team_id: int) -> list:
+        """Return the squad member list for *team_id*, cached with 7-day TTL."""
+        cache_file = self._cache_dir / "squads" / f"{team_id}.json"
+        cached = self._cache_read(cache_file, _PLAYER_CACHE_TTL)
+        if cached is not None:
+            return cached
+
+        squad = self._get(f"/teams/{team_id}", include="players.player")
+        members = (squad[0].get("players") if squad else None) or []
+        self._cache_write(cache_file, members)
+        return members
+
+    def _player_stats(self, pid: int) -> list:
+        """Return per-season statistics for *pid*, cached with 7-day TTL."""
+        cache_file = self._cache_dir / "players" / f"{pid}.json"
+        cached = self._cache_read(cache_file, _PLAYER_CACHE_TTL)
+        if cached is not None:
+            return cached
+
+        rows = self._get(f"/players/{pid}", include="statistics.details.type")
+        stats = (rows[0].get("statistics") if rows else []) or []
+        self._cache_write(cache_file, stats)
+        return stats
 
     def team_player_goals(
-        self, team: str, max_players: int = 30
+        self, team: str, max_players: int = 30, bypass_cache: bool = False
     ) -> List[dict]:
         """Per-player goal tallies for a national team's current squad.
 
@@ -268,12 +337,28 @@ class SportmonksProvider:
         signal for goal *shares* — the props model only uses relative goals.
         Returns [{player, goals, minutes, appearances}] like the API-Football
         adapter, so it drops straight into `props.scorer_table`.
+
+        Results are disk-cached (7-day TTL) under ~/.cache/wc26/sportmonks_players/.
+        Pass bypass_cache=True or set WC26_BYPASS_CACHE=1 to force a fresh fetch.
         """
+        if bypass_cache or os.environ.get("WC26_BYPASS_CACHE"):
+            return self._fetch_team_player_goals(team, max_players)
+
+        cache_file = self._cache_dir / "team_goals" / f"{team.lower().replace(' ', '_')}.json"
+        cached = self._cache_read(cache_file, _PLAYER_CACHE_TTL)
+        if cached is not None:
+            return cached
+
+        result = self._fetch_team_player_goals(team, max_players)
+        self._cache_write(cache_file, result)
+        return result
+
+    def _fetch_team_player_goals(self, team: str, max_players: int) -> List[dict]:
+        """Internal: fetch player goal tallies without consulting the top-level cache."""
         team_id = self.find_team_id(team)
         if team_id is None:
             return []
-        squad = self._get(f"/teams/{team_id}", include="players.player")
-        members = (squad[0].get("players") if squad else None) or []
+        members = self._squad_members(team_id)
 
         out = []
         for m in members[:max_players]:
@@ -281,9 +366,9 @@ class SportmonksProvider:
             pid, pname = player.get("id"), player.get("name")
             if not pid or not pname:
                 continue
-            rows = self._get(f"/players/{pid}", include="statistics.details.type")
+            stats = self._player_stats(pid)
             goals = minutes = apps = 0
-            for season in (rows[0].get("statistics") if rows else []) or []:
+            for season in stats:
                 for d in season.get("details", []) or []:
                     tname = (d.get("type") or {}).get("name")
                     val = d.get("value") or {}

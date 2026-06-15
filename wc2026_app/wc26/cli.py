@@ -211,6 +211,33 @@ def cmd_advance(args) -> None:
         print(f"  to-qualify EV: {args.home} @ {odds_h} -> {ev_h:+.3f} | {args.away} @ {odds_a} -> {ev_a:+.3f}")
 
 
+def cmd_scorers(args) -> None:
+    import numpy as np
+
+    from .props import scorer_table
+    from .providers.sportmonks import SportmonksProvider
+
+    _df, model = _fit(args)
+    grid = np.array(predict_fixture(model, args.team, args.opponent, not args.not_neutral).grid)
+    team_lambda = float(sum(i * grid[i, :].sum() for i in range(grid.shape[0])))
+
+    provider = SportmonksProvider()
+    pg = provider.team_player_goals(args.team, max_players=args.max_players)
+    goals = {r["player"]: r["goals"] for r in pg if r["goals"] > 0}
+    if not goals:
+        print(f"no player goal data for {args.team}")
+        return
+    print(
+        f"{args.team} anytime scorer vs {args.opponent} "
+        f"(lambda={team_lambda:.2f}, {len(goals)} scorers):"
+    )
+    for r in scorer_table(team_lambda, goals)[: args.top]:
+        print(
+            f"  {r['player']:<26} goals {r['goals']:>3}  "
+            f"p {r['p_score'] * 100:5.1f}%  fair {r['fair_odds']:.2f}"
+        )
+
+
 def cmd_xg(args) -> None:
     from .providers.sportmonks import SportmonksProvider
     from .xg import estimate_xg
@@ -279,6 +306,13 @@ def main(argv=None) -> None:
     bench.add_argument("--interval", type=float, default=5.0)
     bench.add_argument("--odds", action="store_true", help="also poll odds endpoint")
 
+    sc = sub.add_parser("scorers", help="anytime-scorer fair odds for a team (sportmonks squad)")
+    sc.add_argument("--team", required=True)
+    sc.add_argument("--opponent", required=True)
+    sc.add_argument("--not-neutral", action="store_true")
+    sc.add_argument("--max-players", type=int, default=26)
+    sc.add_argument("--top", type=int, default=15)
+
     xg = sub.add_parser("xg", help="shot-based xG proxy for finished matches (sportmonks)")
     xg.add_argument("--since", required=True, help="window start YYYY-MM-DD")
     xg.add_argument("--until", required=True, help="window end YYYY-MM-DD")
@@ -300,6 +334,7 @@ def main(argv=None) -> None:
         "advance": cmd_advance,
         "benchmark": cmd_benchmark,
         "xg": cmd_xg,
+        "scorers": cmd_scorers,
     }[args.command](args)
 
 
